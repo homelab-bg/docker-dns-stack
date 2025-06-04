@@ -98,9 +98,9 @@ parent: eth0  # Change to your network interface
 
 ### DNS Upstream Configuration
 
-- **Unbound** forwards to Google DNS (8.8.8.8, 8.8.4.4)
+- **Unbound** performs recursive DNS resolution (no forwarding)
 - **AdGuard** uses Unbound as upstream (`172.23.0.10`)
-- Modify `unbound/unbound.conf` to change upstream resolvers
+- Modify `unbound/unbound.conf` to enable forwarding if desired
 
 ## 🔧 Service Management
 
