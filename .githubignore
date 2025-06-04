@@ -1,0 +1,16 @@
+.DS_Store
+
+# History files
+.ash_history
+.bash_history
+
+# Environment files
+.env
+.env.local
+
+# Runtime data
+_archive/
+adguard/work/
+
+# Logs
+*.log

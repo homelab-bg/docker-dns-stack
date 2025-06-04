@@ -1,0 +1,122 @@
+---
+networks:
+  dns_backend:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.23.0.0/24
+          ip_range: 172.23.0.0/24  # Explicitly define IP range
+
+  dns_frontend:
+    driver: ipvlan
+    driver_opts:
+      ipvlan_mode: l2
+      parent: eth0
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.16.0.0/24
+          gateway: 172.16.0.1
+          ip_range: 172.16.0.0/29  # Restrict IP range for DNS servers (172.16.0.4 - 172.16.0.11)
+
+services:
+  unbound:
+    image: alpinelinux/unbound
+    container_name: unbound
+    restart: unless-stopped
+    # port mappings not required as AdGuard will connect through the bridge network
+    # ports:
+    #   - 5335:53/tcp
+    #   - 5335:53/udp
+    environment:
+      - TZ=Australia/Brisbane
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - ./unbound/unbound.conf:/etc/unbound/unbound.conf:ro
+      - ./unbound/access_lists.conf:/etc/unbound/access_lists.conf:ro
+      - ./unbound/host_entries.conf:/etc/unbound/host_entries.conf:ro
+    healthcheck:
+      test: ["CMD", "unbound-control", "status"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+      start_interval: 3s
+    networks:
+      dns_backend:
+        ipv4_address: 172.23.0.10
+
+  adguard:
+    image: adguard/adguardhome
+    container_name: adguard
+    restart: unless-stopped
+    # There is no need for port mappings when using the IPvlan network driver
+    # ports:
+    #   - 5353:53/tcp # plain DNS over tcp
+    #   - 5353:53/udp # plain DNS over udp
+    #   - 3000:3000/tcp # initial setup web interface
+    #   - 80:80/tcp # HTTP web interface
+    #   - 443:443/tcp # https/DNS-over-HTTPS interface
+    #   - 853:853/tcp # DNS-over-TLS
+    environment:
+      - TZ=Australia/Brisbane
+      - PUID=1000
+      - PGID=1000
+    extra_hosts:
+      - "healthcheck.local=0.0.0.0"
+    volumes:
+      - ./adguard/config:/opt/adguardhome/conf # app configuration
+      - ./adguard/work:/opt/adguardhome/work # app working directory
+    healthcheck:
+      test: ["CMD", "nslookup", "healthcheck.local", "127.0.0.1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+      start_interval: 3s
+    networks:
+      dns_backend:
+        ipv4_address: 172.23.0.11
+      dns_frontend:
+        ipv4_address: 172.16.0.2
+    depends_on:
+      - unbound
+
+  adguard-sync:
+    image: lscr.io/linuxserver/adguardhome-sync:latest
+    container_name: adguard-sync
+    ports:
+      - 8080:8080
+    environment:
+      - TZ=Australia/Brisbane
+      - PUID=1000
+      - PGID=1000
+      - ORIGIN_USERNAME=${ORIGIN_USERNAME}
+      - ORIGIN_PASSWORD=${ORIGIN_PASSWORD}
+      - REPLICA1_USERNAME=${REPLICA1_USERNAME}
+      - REPLICA1_PASSWORD=${REPLICA1_PASSWORD}
+      - API_USERNAME=${API_USERNAME}
+      - API_PASSWORD=${API_PASSWORD}
+      - CONFIGFILE=/config/adguardhome-sync.yaml #optional
+    profiles:
+      - sync
+    volumes:
+      - ./adguard-sync/config:/config
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "--output", "/dev/null", "-u", "${API_USERNAME}:${API_PASSWORD}", "http://127.0.0.1:8080/metrics"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+      start_interval: 3s
+    networks:
+      dns_backend:
+      # dns_frontend:
+      #   ipv4_address: 172.16.0.5
+    restart: unless-stopped
+    depends_on:
+      - adguard
