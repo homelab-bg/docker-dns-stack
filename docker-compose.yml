@@ -1,122 +1,149 @@
 ---
 networks:
   dns_backend:
+    name: ${DEPLOYMENT_NAME}_dns_backend
     driver: bridge
     ipam:
       driver: default
       config:
-        - subnet: 172.23.0.0/24
-          ip_range: 172.23.0.0/24  # Explicitly define IP range
+        - subnet: ${DNS_BACKEND_SUBNET}
+          gateway: ${DNS_BACKEND_GATEWAY}
 
   dns_frontend:
+    name: ${DEPLOYMENT_NAME}_dns_frontend
     driver: ipvlan
     driver_opts:
       ipvlan_mode: l2
-      parent: eth0
+      parent: ${PARENT_INTERFACE}
+      com.docker.network.driver.mtu: 1500
+      priority: 1
     ipam:
       driver: default
       config:
-        - subnet: 172.16.0.0/24
-          gateway: 172.16.0.1
-          ip_range: 172.16.0.0/29  # Restrict IP range for DNS servers (172.16.0.4 - 172.16.0.11)
+        - subnet: ${DNS_FRONTEND_SUBNET}
+          gateway: ${DNS_FRONTEND_GATEWAY}
+          ip_range: ${DNS_FRONTEND_IP_RANGE}
 
 services:
   unbound:
-    image: alpinelinux/unbound
-    container_name: unbound
+    image: alpinelinux/unbound:${UNBOUND_VERSION:-latest}
+    container_name: ${DEPLOYMENT_NAME}_unbound
+    hostname: unbound-${DEPLOYMENT_NAME}
     restart: unless-stopped
-    # port mappings not required as AdGuard will connect through the bridge network
-    # ports:
-    #   - 5335:53/tcp
-    #   - 5335:53/udp
     environment:
-      - TZ=Australia/Brisbane
-      - PUID=1000
-      - PGID=1000
+      - TZ=${TIMEZONE}
+      - PUID=${PUID}
+      - PGID=${PGID}
     volumes:
       - ./unbound/unbound.conf:/etc/unbound/unbound.conf:ro
       - ./unbound/access_lists.conf:/etc/unbound/access_lists.conf:ro
       - ./unbound/host_entries.conf:/etc/unbound/host_entries.conf:ro
     healthcheck:
       test: ["CMD", "unbound-control", "status"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
+      interval: ${HEALTH_CHECK_INTERVAL}
+      timeout: ${HEALTH_CHECK_TIMEOUT}
+      retries: ${HEALTH_CHECK_RETRIES}
       start_period: 10s
       start_interval: 3s
     networks:
       dns_backend:
-        ipv4_address: 172.23.0.10
+        ipv4_address: ${UNBOUND_IP}
+    deploy:
+      resources:
+        limits:
+          memory: ${UNBOUND_MEMORY_LIMIT}
+        reservations:
+          memory: 128m
+    labels:
+      - "deployment=${DEPLOYMENT_NAME}"
+      - "environment=${ENVIRONMENT}"
+      - "service=unbound"
 
   adguard:
-    image: adguard/adguardhome
-    container_name: adguard
+    image: adguard/adguardhome:${ADGUARD_VERSION:-latest}
+    container_name: ${DEPLOYMENT_NAME}_adguard
+    hostname: adguard-${DEPLOYMENT_NAME}
     restart: unless-stopped
-    # There is no need for port mappings when using the IPvlan network driver
-    # ports:
-    #   - 5353:53/tcp # plain DNS over tcp
-    #   - 5353:53/udp # plain DNS over udp
-    #   - 3000:3000/tcp # initial setup web interface
-    #   - 80:80/tcp # HTTP web interface
-    #   - 443:443/tcp # https/DNS-over-HTTPS interface
-    #   - 853:853/tcp # DNS-over-TLS
     environment:
-      - TZ=Australia/Brisbane
-      - PUID=1000
-      - PGID=1000
+      - TZ=${TIMEZONE}
+      - PUID=${PUID}
+      - PGID=${PGID}
     extra_hosts:
       - "healthcheck.local=0.0.0.0"
     volumes:
-      - ./adguard/config:/opt/adguardhome/conf # app configuration
-      - ./adguard/work:/opt/adguardhome/work # app working directory
+      - ./adguard/config:/opt/adguardhome/conf
+      - ./adguard/work:/opt/adguardhome/work
     healthcheck:
       test: ["CMD", "nslookup", "healthcheck.local", "127.0.0.1"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
+      interval: ${HEALTH_CHECK_INTERVAL}
+      timeout: ${HEALTH_CHECK_TIMEOUT}
+      retries: ${HEALTH_CHECK_RETRIES}
       start_period: 10s
       start_interval: 3s
     networks:
       dns_backend:
-        ipv4_address: 172.23.0.11
+        ipv4_address: ${ADGUARD_BACKEND_IP}
       dns_frontend:
-        ipv4_address: 172.16.0.2
+        ipv4_address: ${ADGUARD_FRONTEND_IP}
     depends_on:
       - unbound
+    deploy:
+      resources:
+        limits:
+          memory: ${ADGUARD_MEMORY_LIMIT}
+        reservations:
+          memory: 256m
+    labels:
+      - "deployment=${DEPLOYMENT_NAME}"
+      - "environment=${ENVIRONMENT}"
+      - "service=adguard"
+      - "traefik.enable=true"
+      - "traefik.http.routers.adguard-${DEPLOYMENT_NAME}.rule=Host(`adguard-${DEPLOYMENT_NAME}.${LOCAL_DOMAIN}`)"
 
   adguard-sync:
-    image: lscr.io/linuxserver/adguardhome-sync:latest
-    container_name: adguard-sync
+    image: lscr.io/linuxserver/adguardhome-sync:${SYNC_VERSION:-latest}
+    container_name: ${DEPLOYMENT_NAME}_adguard_sync
+    hostname: adguard-sync-${DEPLOYMENT_NAME}
     ports:
-      - 8080:8080
+      - "${ADGUARD_SYNC_PORT}:8080"
     environment:
-      - TZ=Australia/Brisbane
-      - PUID=1000
-      - PGID=1000
+      - TZ=${TIMEZONE}
+      - PUID=${PUID}
+      - PGID=${PGID}
       - ORIGIN_USERNAME=${ORIGIN_USERNAME}
       - ORIGIN_PASSWORD=${ORIGIN_PASSWORD}
       - REPLICA1_USERNAME=${REPLICA1_USERNAME}
       - REPLICA1_PASSWORD=${REPLICA1_PASSWORD}
       - API_USERNAME=${API_USERNAME}
       - API_PASSWORD=${API_PASSWORD}
-      - CONFIGFILE=/config/adguardhome-sync.yaml #optional
+      - CONFIGFILE=/config/adguardhome-sync.yaml
     profiles:
       - sync
+      - monitoring
+      - full
     volumes:
-      - ./adguard-sync/config:/config
+      - ./adguard-sync/adguardhome-sync.yaml:/config/adguardhome-sync.yaml
     security_opt:
       - no-new-privileges:true
     healthcheck:
       test: ["CMD", "curl", "-f", "-s", "--output", "/dev/null", "-u", "${API_USERNAME}:${API_PASSWORD}", "http://127.0.0.1:8080/metrics"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
+      interval: ${HEALTH_CHECK_INTERVAL}
+      timeout: ${HEALTH_CHECK_TIMEOUT}
+      retries: ${HEALTH_CHECK_RETRIES}
       start_period: 10s
       start_interval: 3s
     networks:
       dns_backend:
-      # dns_frontend:
-      #   ipv4_address: 172.16.0.5
     restart: unless-stopped
     depends_on:
       - adguard
+    deploy:
+      resources:
+        limits:
+          memory: ${SYNC_MEMORY_LIMIT}
+        reservations:
+          memory: 64m
+    labels:
+      - "deployment=${DEPLOYMENT_NAME}"
+      - "environment=${ENVIRONMENT}"
+      - "service=adguard-sync"

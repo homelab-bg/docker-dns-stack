@@ -9,7 +9,7 @@ continueOnError: false
 
 origin:
   # url of the origin instance
-  url: http://172.16.0.3
+  url: http://192.168.0.2
   # apiPath: define an api path if other than "/control"
   # insecureSkipVerify: true # disable tls check
   username: ${ORIGIN_USERNAME}
