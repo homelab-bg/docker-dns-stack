@@ -26,6 +26,7 @@ networks:
 
 services:
   unbound:
+    # https://gitlab.alpinelinux.org/alpine/infra/docker/unbound
     image: alpinelinux/unbound:${UNBOUND_VERSION:-latest}
     container_name: ${DEPLOYMENT_NAME}_unbound
     hostname: unbound-${DEPLOYMENT_NAME}
